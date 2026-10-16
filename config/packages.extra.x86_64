@@ -1,0 +1,20 @@
+# Ninjas OS desktop and basic development tools
+# This list is appended to the official Archiso releng package list.
+base
+linux
+linux-firmware
+networkmanager
+git
+sudo
+python
+python-pip
+curl
+wget
+nano
+htop
+plasma-meta
+konsole
+dolphin
+sddm
+xorg-server
+plasma-x11-session

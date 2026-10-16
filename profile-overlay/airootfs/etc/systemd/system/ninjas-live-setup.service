@@ -1,0 +1,12 @@
+[Unit]
+Description=Ninjas OS live-session setup
+After=local-fs.target
+Before=display-manager.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/ninjas-live-setup
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target

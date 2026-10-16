@@ -1,0 +1,36 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+# This service runs only in the live ISO. It creates a convenience account.
+# Do not copy this configuration into a production or installed system.
+
+if ! id ninja >/dev/null 2>&1; then
+  useradd --create-home --groups wheel,audio,video,storage,power --shell /bin/bash ninja
+fi
+
+# Live image convenience only: no password and passwordless sudo.
+passwd --delete ninja >/dev/null 2>&1 || true
+install -d -m 0750 /etc/sudoers.d
+printf '%s\n' 'ninja ALL=(ALL:ALL) NOPASSWD: ALL' > /etc/sudoers.d/99-ninjas-live
+chmod 0440 /etc/sudoers.d/99-ninjas-live
+visudo -cf /etc/sudoers.d/99-ninjas-live >/dev/null
+
+# Configure SDDM autologin for the live desktop.
+install -d -m 0755 /etc/sddm.conf.d
+cat > /etc/sddm.conf.d/10-ninjas-live.conf <<'EOF'
+[Autologin]
+User=ninja
+Session=plasma.desktop
+Relogin=false
+EOF
+
+# Add a visible marker in the live user's home.
+install -d -o ninja -g ninja -m 0755 /home/ninja/Desktop
+cat > /home/ninja/Desktop/Welcome-to-Ninjas-OS.txt <<'EOF'
+Welcome to Ninjas OS Alpha 0.1.
+This is an experimental live environment.
+EOF
+chown ninja:ninja /home/ninja/Desktop/Welcome-to-Ninjas-OS.txt
+chmod 0644 /home/ninja/Desktop/Welcome-to-Ninjas-OS.txt
+
+exit 0

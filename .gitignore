@@ -1,0 +1,6 @@
+work/
+out/
+*.iso
+*.iso.sig
+*.img
+*.log

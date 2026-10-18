@@ -1,0 +1,12 @@
+Welcome to @NINJAS_OS_NAME@ @NINJAS_OS_VERSION@ ("@NINJAS_OS_CODENAME@").
+
+This is an experimental Arch-based live image built @NINJAS_BUILD_DATE@.
+The desktop session runs as the live user "@NINJAS_LIVE_USER@" (no password,
+passwordless sudo). The AI assistant is NOT included in this release.
+
+Useful commands:
+  journalctl -b -p warning            kernel/service warnings from this boot
+  systemctl status ninjas-live-setup  live user setup service
+  systemctl status sddm NetworkManager
+  cat /etc/ninjas-os-release          image metadata
+

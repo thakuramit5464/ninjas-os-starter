@@ -1,12 +1,17 @@
 [Unit]
-Description=Ninjas OS live-session setup
-After=local-fs.target
-Before=display-manager.service
+Description=Ninjas OS live-session setup (create live user)
+Documentation=file:///etc/ninjas-os-release
+# Only meaningful inside the Archiso live environment.
+ConditionPathIsDirectory=/run/archiso
+After=local-fs.target systemd-sysusers.service systemd-tmpfiles-setup.service
+Before=display-manager.service sddm.service systemd-user-sessions.service
 
 [Service]
 Type=oneshot
-ExecStart=/usr/local/bin/ninjas-live-setup
 RemainAfterExit=yes
+ExecStart=/usr/local/bin/ninjas-live-setup
+StandardOutput=journal
+StandardError=journal
 
 [Install]
 WantedBy=multi-user.target

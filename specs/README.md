@@ -14,7 +14,9 @@ A starter specification pack for building Ninjas OS: a fully scripted, Arch-base
 
 ## How to use
 
-1. Extract this pack into the root of your Ninjas OS repository.
+This pack has been extracted into the repository root (2026-10-16); `CLAUDE.md`, `.specify/`, `specs/` and `prompts/` live there now.
+
+1. ~~Extract this pack into the root of your Ninjas OS repository.~~ Done.
 2. Open that repository in Claude Code.
 3. Read `CLAUDE.md` and `.specify/memory/constitution.md`.
 4. Give Claude the prompt in `prompts/claude-master-prompt.md`.

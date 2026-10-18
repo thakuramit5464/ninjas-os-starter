@@ -1,0 +1,3 @@
+@NINJAS_OS_NAME@ @NINJAS_OS_VERSION@ "@NINJAS_OS_CODENAME@" (\l) - Arch-based live environment
+Build @NINJAS_BUILD_DATE@. For development and testing only.
+

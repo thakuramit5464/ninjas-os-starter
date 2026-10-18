@@ -1,0 +1,7 @@
+# Normalize line endings: the ISO is built on Linux, but the repository is
+# often edited on Windows. Shell scripts and overlay files must stay LF.
+* text=auto eol=lf
+*.png binary
+*.jpg binary
+*.ico binary
+*.iso binary

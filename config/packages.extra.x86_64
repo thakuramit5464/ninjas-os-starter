@@ -1,20 +1,40 @@
-# Ninjas OS desktop and basic development tools
-# This list is appended to the official Archiso releng package list.
-base
-linux
-linux-firmware
+# Packages added on top of the upstream Archiso releng package list.
+# One package per line; '#' starts a comment. Entries already present in the
+# upstream list are skipped by scripts/prepare-profile.sh.
+#
+# Verify names against the current repositories before building:
+#   ./scripts/check-prereqs.sh --packages
+#
+# Rolling-release note (verified 2026-10-16): Plasma 6.8 is Wayland-only.
+# plasma-x11-session no longer exists and plasma-workspace conflicts with
+# it, so the live desktop uses the Plasma Wayland session.
+
+# --- Desktop: KDE Plasma ---
+plasma-meta
+sddm
+konsole
+dolphin
+ark
+kate
+
+# --- Graphics / fonts / audio ---
+mesa
+noto-fonts
+ttf-dejavu
+pipewire
+pipewire-pulse
+wireplumber
+
+# --- Networking (replaces upstream systemd-networkd + iwd enablement) ---
 networkmanager
+
+# --- Virtual machine guest support (replaces virtualbox-guest-utils-nox) ---
+virtualbox-guest-utils
+
+# --- Developer and diagnostic tools (future AI controller is Python) ---
 git
-sudo
 python
 python-pip
 curl
 wget
-nano
 htop
-plasma-meta
-konsole
-dolphin
-sddm
-xorg-server
-plasma-x11-session

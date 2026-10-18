@@ -1,36 +1,81 @@
 #!/usr/bin/env bash
+# Ninjas OS live-session setup.
+#
+# Runs once per boot from ninjas-live-setup.service inside the Archiso live
+# environment. It creates the unprivileged convenience user that SDDM
+# auto-logs in (see /etc/sddm.conf.d/10-ninjas-live.conf) and drops a welcome
+# marker on its desktop. Passwordless sudo for this user is shipped statically
+# in /etc/sudoers.d/99-ninjas-live.
+#
+# This is LIVE IMAGE convenience only. Never run it on an installed system.
 set -Eeuo pipefail
 
-# This service runs only in the live ISO. It creates a convenience account.
-# Do not copy this configuration into a production or installed system.
+log() { printf 'ninjas-live-setup: %s\n' "$*"; }
 
-if ! id ninja >/dev/null 2>&1; then
-  useradd --create-home --groups wheel,audio,video,storage,power --shell /bin/bash ninja
+if [[ ! -d /run/archiso ]]; then
+  log "not running inside an Archiso live environment; refusing to modify accounts"
+  exit 0
 fi
 
-# Live image convenience only: no password and passwordless sudo.
-passwd --delete ninja >/dev/null 2>&1 || true
-install -d -m 0750 /etc/sudoers.d
-printf '%s\n' 'ninja ALL=(ALL:ALL) NOPASSWD: ALL' > /etc/sudoers.d/99-ninjas-live
-chmod 0440 /etc/sudoers.d/99-ninjas-live
-visudo -cf /etc/sudoers.d/99-ninjas-live >/dev/null
+live_user="ninja"
+if [[ -r /etc/ninjas-os-release ]]; then
+  # shellcheck disable=SC1091
+  source /etc/ninjas-os-release
+  live_user="${NINJAS_LIVE_USER:-ninja}"
+fi
+if [[ ! "${live_user}" =~ ^[a-z_][a-z0-9_-]{0,31}$ ]]; then
+  log "invalid live user name: ${live_user}"
+  exit 1
+fi
 
-# Configure SDDM autologin for the live desktop.
-install -d -m 0755 /etc/sddm.conf.d
-cat > /etc/sddm.conf.d/10-ninjas-live.conf <<'EOF'
-[Autologin]
-User=ninja
-Session=plasma.desktop
-Relogin=false
-EOF
+# Only add supplementary groups that exist on this image.
+wanted_groups=(wheel audio video storage power input)
+groups=()
+for g in "${wanted_groups[@]}"; do
+  if getent group "${g}" >/dev/null; then
+    groups+=("${g}")
+  fi
+done
+group_list=""
+if (( ${#groups[@]} > 0 )); then
+  group_list="$(IFS=,; printf '%s' "${groups[*]}")"
+fi
 
-# Add a visible marker in the live user's home.
-install -d -o ninja -g ninja -m 0755 /home/ninja/Desktop
-cat > /home/ninja/Desktop/Welcome-to-Ninjas-OS.txt <<'EOF'
-Welcome to Ninjas OS Alpha 0.1.
-This is an experimental live environment.
-EOF
-chown ninja:ninja /home/ninja/Desktop/Welcome-to-Ninjas-OS.txt
-chmod 0644 /home/ninja/Desktop/Welcome-to-Ninjas-OS.txt
+if ! id -u "${live_user}" >/dev/null 2>&1; then
+  log "creating live user ${live_user} (groups: ${group_list:-none})"
+  useradd_args=(--create-home --user-group --shell /bin/bash)
+  if [[ -n "${group_list}" ]]; then
+    useradd_args+=(--groups "${group_list}")
+  fi
+  useradd "${useradd_args[@]}" "${live_user}"
+else
+  log "live user ${live_user} already exists"
+fi
 
+# Live convenience: empty password so autologin and screen unlock never block.
+passwd --delete "${live_user}" >/dev/null 2>&1 || true
+
+home_dir="$(getent passwd "${live_user}" | cut -d: -f6)"
+if [[ -z "${home_dir}" || ! -d "${home_dir}" ]]; then
+  log "home directory for ${live_user} not found"
+  exit 1
+fi
+
+install -d -o "${live_user}" -g "${live_user}" -m 0755 "${home_dir}/Desktop"
+marker="${home_dir}/Desktop/Welcome-to-Ninjas-OS.txt"
+{
+  if [[ -r /etc/ninjas-os-release ]]; then
+    printf 'Welcome to %s %s (%s).\n' \
+      "${NINJAS_OS_NAME:-Ninjas OS}" "${NINJAS_OS_VERSION:-alpha}" "${NINJAS_OS_CODENAME:-}"
+    printf 'Build date: %s\n' "${NINJAS_BUILD_DATE:-unknown}"
+  else
+    printf 'Welcome to Ninjas OS.\n'
+  fi
+  printf '\nThis is an experimental live environment. Changes are lost on reboot.\n'
+  printf 'See ~/README-NINJAS-OS.txt for diagnostic commands.\n'
+} > "${marker}"
+chown "${live_user}:${live_user}" "${marker}"
+chmod 0644 "${marker}"
+
+log "done"
 exit 0

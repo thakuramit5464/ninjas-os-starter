@@ -1,0 +1,14 @@
+# Test fixture: abbreviated upstream releng package list.
+base
+iwd
+linux
+linux-firmware
+mkinitcpio
+mkinitcpio-archiso
+nano
+sudo
+syslinux
+systemd-resolvconf
+virtualbox-guest-utils-nox
+wpa_supplicant
+zsh

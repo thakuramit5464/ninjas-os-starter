@@ -1,0 +1,5 @@
+# Upstream releng packages that must be dropped from the copied profile.
+# Each removal is a documented deviation; see docs/upstream-deviations.md.
+#
+# Conflicts with virtualbox-guest-utils (needed for a graphical guest session).
+virtualbox-guest-utils-nox

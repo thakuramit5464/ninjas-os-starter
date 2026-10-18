@@ -1,6 +1,17 @@
+# Generated build artifacts (never commit)
 work/
 out/
 *.iso
 *.iso.sig
 *.img
 *.log
+
+# Test scratch space
+tests/.tmp/
+
+# Editor / OS noise
+.vscode/
+.idea/
+*.swp
+.DS_Store
+Thumbs.db

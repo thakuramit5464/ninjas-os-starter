@@ -1,0 +1,4 @@
+# Ninjas OS LIVE IMAGE ONLY: passwordless sudo for the live convenience user.
+# Never copy this file to an installed system. Mode is forced to 0440 by
+# file_permissions in profiledef.sh (see scripts/prepare-profile.sh).
+ninja ALL=(ALL:ALL) NOPASSWD: ALL

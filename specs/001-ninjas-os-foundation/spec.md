@@ -1,6 +1,6 @@
 # Feature Specification: Ninjas OS Foundation and AI-Ready Desktop
 
-**Status:** Draft  
+**Status:** Accepted for Alpha 0.1; implementation in progress (build pipeline done, ISO build/boot pending as of 2026-10-16)  
 **Feature branch suggestion:** `001-ninjas-os-foundation`
 
 ## 1. Summary
@@ -12,7 +12,7 @@ Manual OS customization is hard to reproduce, debug, share, and maintain. Ninjas
 ## 3. Goals
 - Build a custom Archiso ISO using a scripted process.
 - Use the official Archiso `releng` profile as the baseline.
-- Provide a basic graphical desktop, terminal, networking, and useful diagnostics.
+- Provide a basic graphical desktop (KDE Plasma 6 on Wayland), terminal, networking, and useful diagnostics.
 - Apply Ninjas OS branding and a welcome marker.
 - Document VM testing and safe USB testing.
 - Define an AI action architecture with strict policy enforcement before implementing broad computer control.
@@ -24,6 +24,7 @@ Manual OS customization is hard to reproduce, debug, share, and maintain. Ninjas
 - Guaranteeing bit-for-bit reproducible builds from moving Arch repositories.
 - Supporting every physical computer or graphics chipset.
 - Including a large local AI model in the ISO.
+- An X11 Plasma session: Plasma 6.8 is Wayland-only in Arch (`plasma-x11-session` was removed upstream in 2026).
 
 ## 5. Target environment
 - Build host: Windows PC.
@@ -111,12 +112,12 @@ As a developer, I can validate changes in a VM and return to a known-good state.
 - Fail closed on errors.
 
 ## 10. Release acceptance checklist
-- [ ] Build prerequisites documented.
-- [ ] Profile preparation succeeds.
-- [ ] Shell syntax checks pass.
+- [x] Build prerequisites documented. *(README, docs/building.md, scripts/check-prereqs.sh)*
+- [x] Profile preparation succeeds. *(against the test fixture on 2026-10-16; against the real releng profile: pending in Arch VM)*
+- [x] Shell syntax checks pass. *(bash -n and shellcheck 0.11.0 at warning level, 2026-10-16)*
 - [ ] ISO build completes in an Arch VM.
 - [ ] ISO boots in a disposable VM.
 - [ ] Desktop, terminal, and networking verified.
 - [ ] ISO checksum and package manifest recorded.
 - [ ] No physical disk was modified.
-- [ ] Known limitations documented.
+- [x] Known limitations documented. *(README rolling-release caveat, docs/upstream-deviations.md)*

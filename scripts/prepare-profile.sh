@@ -1,48 +1,316 @@
 #!/usr/bin/env bash
-set -Eeuo pipefail
+# Prepare the Ninjas OS Archiso profile in work/profile.
+#
+# Steps (all idempotent; work/profile is rebuilt from scratch every run):
+#   1. validate the installed upstream Archiso releng profile,
+#   2. copy it to work/profile (the upstream copy is never modified),
+#   3. merge config/packages.extra.x86_64 and config/packages.remove.x86_64
+#      into the copied packages.x86_64,
+#   4. remove upstream service enablement listed in config/upstream-units-disable,
+#   5. copy profile-overlay/airootfs on top of the copied airootfs,
+#   6. render profile-overlay/templates/*.in with the metadata from
+#      config/ninjas-os.conf,
+#   7. create the symlinks declared in config/airootfs-symlinks,
+#   8. append Ninjas OS overrides to profiledef.sh (ISO name, label, version,
+#      publisher, application, extra file_permissions).
+#
+# Usage: scripts/prepare-profile.sh [--quiet]
+# Env:   see scripts/lib/common.sh (NINJAS_UPSTREAM_PROFILE, NINJAS_WORK_DIR, ...)
+#        SOURCE_DATE_EPOCH  fixes the build timestamp used for label/version.
 
-ROOT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
-WORK_DIR="${ROOT_DIR}/work"
-PROFILE_DIR="${WORK_DIR}/profile"
-UPSTREAM_PROFILE="/usr/share/archiso/configs/releng"
-OVERLAY_DIR="${ROOT_DIR}/profile-overlay/airootfs"
-EXTRA_PACKAGES="${ROOT_DIR}/config/packages.extra.x86_64"
+# shellcheck source=lib/common.sh
+source "$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)/lib/common.sh"
 
-if [[ "${EUID}" -eq 0 ]]; then
-  echo "Run prepare-profile.sh as your normal user, not with sudo." >&2
-  exit 1
+quiet=0
+for arg in "$@"; do
+  case "${arg}" in
+    --quiet|-q) quiet=1 ;;
+    -h|--help)
+      sed -n '2,/^$/p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
+      exit 0 ;;
+    *) die "unknown argument: ${arg} (try --help)" ;;
+  esac
+done
+if (( quiet )); then
+  log() { :; }
+  ok() { :; }
 fi
 
-if [[ ! -d "${UPSTREAM_PROFILE}" ]]; then
-  echo "Archiso releng profile not found at ${UPSTREAM_PROFILE}." >&2
-  echo "Install it with: sudo pacman -S --needed archiso" >&2
-  exit 1
-fi
+ninjas_require_not_root
+ninjas_load_config
 
-mkdir -p "${WORK_DIR}"
-rm -rf "${PROFILE_DIR}"
-cp -a "${UPSTREAM_PROFILE}" "${PROFILE_DIR}"
+upstream="${NINJAS_UPSTREAM_PROFILE}"
+profile="${NINJAS_PROFILE_DIR}"
+airootfs="${profile}/airootfs"
 
-# Add the project's packages without replacing the upstream package list.
-cat "${EXTRA_PACKAGES}" >> "${PROFILE_DIR}/packages.x86_64"
+# ---------------------------------------------------------------------------
+# 1. Validate upstream profile
+# ---------------------------------------------------------------------------
+log "Validating upstream Archiso profile: ${upstream}"
+[[ -d "${upstream}" ]] || die "Archiso releng profile not found at ${upstream}.
+Install it inside the Arch VM with:  sudo pacman -S --needed archiso
+(or point NINJAS_UPSTREAM_PROFILE at another Archiso profile directory)"
+for required in profiledef.sh packages.x86_64 pacman.conf airootfs; do
+  [[ -e "${upstream}/${required}" ]] \
+    || die "upstream profile is missing ${required}; is ${upstream} really an Archiso profile?"
+done
+ninjas_path_is_inside "${upstream}" "${NINJAS_WORK_DIR}" \
+  && die "upstream profile must not live inside the work directory"
 
-# Overlay Ninjas OS files onto the upstream airootfs.
-cp -a "${OVERLAY_DIR}/." "${PROFILE_DIR}/airootfs/"
+# Fingerprint the upstream profile so we can prove we did not touch it.
+upstream_fingerprint() {
+  (cd -- "${upstream}" && find . -type f -print0 | sort -z | xargs -0 sha256sum) | sha256sum
+}
+fingerprint_before="$(upstream_fingerprint)"
 
-# Give the image a custom label/version in profiledef.sh when those variables exist.
-# Keep the upstream profile's boot mode and image settings intact.
-if grep -q '^iso_name=' "${PROFILE_DIR}/profiledef.sh"; then
-  sed -i 's/^iso_name=.*/iso_name="ninjas-os"/' "${PROFILE_DIR}/profiledef.sh"
-fi
-if grep -q '^iso_label=' "${PROFILE_DIR}/profiledef.sh"; then
-  sed -i 's/^iso_label=.*/iso_label="NINJAS_OS"/' "${PROFILE_DIR}/profiledef.sh"
-fi
-if grep -q '^iso_publisher=' "${PROFILE_DIR}/profiledef.sh"; then
-  sed -i 's/^iso_publisher=.*/iso_publisher="Ninjas OS Project"/' "${PROFILE_DIR}/profiledef.sh"
-fi
-if grep -q '^iso_application=' "${PROFILE_DIR}/profiledef.sh"; then
-  sed -i 's/^iso_application=.*/iso_application="Ninjas OS Live ISO"/' "${PROFILE_DIR}/profiledef.sh"
-fi
+# ---------------------------------------------------------------------------
+# 2. Fresh copy into work/profile
+# ---------------------------------------------------------------------------
+log "Copying upstream profile to ${profile}"
+mkdir -p -- "${NINJAS_WORK_DIR}"
+ninjas_safe_rm_rf "${profile}"
+cp -a -- "${upstream}" "${profile}"
+# Make sure we can write everything we copied (upstream files are root-owned
+# 0644/0755 but cp -a as a user keeps modes, not ownership).
+chmod -R u+rwX -- "${profile}"
+ok "profile copied"
 
-echo "Prepared profile at: ${PROFILE_DIR}"
-echo "Review ${PROFILE_DIR}/profiledef.sh and packages.x86_64 before building."
+# ---------------------------------------------------------------------------
+# 3. Package list
+# ---------------------------------------------------------------------------
+log "Merging package lists"
+pkg_file="${profile}/packages.x86_64"
+mapfile -t upstream_pkgs < <(ninjas_read_list "${pkg_file}")
+mapfile -t extra_pkgs < <(ninjas_read_list "${NINJAS_CONFIG_DIR}/packages.extra.x86_64")
+mapfile -t remove_pkgs < <(ninjas_read_list "${NINJAS_CONFIG_DIR}/packages.remove.x86_64")
+
+pkg_re='^[a-z0-9@._+-]+$'
+for p in "${extra_pkgs[@]}" "${remove_pkgs[@]}"; do
+  [[ "${p}" =~ ${pkg_re} ]] || die "invalid package name in config: '${p}'"
+done
+
+declare -A upstream_set=() remove_set=() seen=()
+for p in "${upstream_pkgs[@]}"; do upstream_set["${p}"]=1; done
+for p in "${remove_pkgs[@]}"; do
+  remove_set["${p}"]=1
+  [[ -n "${upstream_set[${p}]:-}" ]] \
+    || warn "packages.remove.x86_64 lists '${p}' but the upstream list no longer contains it"
+done
+
+merged="${pkg_file}.ninjas.tmp"
+{
+  printf '# Generated by Ninjas OS scripts/prepare-profile.sh from the upstream\n'
+  printf '# Archiso releng package list. Upstream entries are kept verbatim below;\n'
+  printf '# removals are commented out and project additions appended.\n'
+  printf '# Edit config/packages.*.x86_64 in the repository, not this file.\n\n'
+  while IFS= read -r line; do
+    entry="$(sed -e 's/#.*//' -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' <<<"${line}")"
+    if [[ -n "${entry}" && -n "${remove_set[${entry}]:-}" ]]; then
+      printf '# removed by Ninjas OS (see config/packages.remove.x86_64): %s\n' "${entry}"
+    else
+      printf '%s\n' "${line}"
+    fi
+  done < "${pkg_file}"
+  printf '\n# --- Ninjas OS additions (config/packages.extra.x86_64) ---\n'
+  for p in "${extra_pkgs[@]}"; do
+    if [[ -n "${upstream_set[${p}]:-}" && -z "${remove_set[${p}]:-}" ]]; then
+      continue # already provided upstream
+    fi
+    if [[ -z "${seen[${p}]:-}" ]]; then
+      seen["${p}"]=1
+      printf '%s\n' "${p}"
+    fi
+  done
+} > "${merged}"
+mv -f -- "${merged}" "${pkg_file}"
+
+# Sanity: the final list must have no duplicates (pacstrap tolerates them,
+# but a duplicate means our config is confused).
+dupes="$(ninjas_read_list "${pkg_file}" | sort | uniq -d || true)"
+[[ -z "${dupes}" ]] || die "duplicate packages in merged list: ${dupes//$'\n'/, }"
+ok "packages: ${#upstream_pkgs[@]} upstream, ${#remove_pkgs[@]} removed, ${#seen[@]} added"
+
+# ---------------------------------------------------------------------------
+# 4. Disable selected upstream unit enablement
+# ---------------------------------------------------------------------------
+log "Removing upstream service enablement listed in config/upstream-units-disable"
+mapfile -t disable_units < <(ninjas_read_list "${NINJAS_CONFIG_DIR}/upstream-units-disable")
+for rel in "${disable_units[@]}"; do
+  [[ "${rel}" == /* && "${rel}" != *..* ]] || die "invalid path in upstream-units-disable: ${rel}"
+  target="${airootfs}${rel}"
+  if [[ -L "${target}" || -e "${target}" ]]; then
+    [[ -d "${target}" && ! -L "${target}" ]] && die "refusing to remove directory ${rel}"
+    rm -f -- "${target}"
+    ok "disabled ${rel}"
+  else
+    warn "${rel} not present in upstream profile (upstream may have changed); skipping"
+  fi
+done
+
+# ---------------------------------------------------------------------------
+# 5. Overlay
+# ---------------------------------------------------------------------------
+log "Applying filesystem overlay from ${NINJAS_OVERLAY_DIR}"
+[[ -d "${NINJAS_OVERLAY_DIR}" ]] || die "overlay directory missing: ${NINJAS_OVERLAY_DIR}"
+# The overlay must contain regular files and directories only. Symlinks are
+# declared in config/airootfs-symlinks because they do not survive Windows
+# checkouts.
+overlay_links="$(find "${NINJAS_OVERLAY_DIR}" -type l -print || true)"
+[[ -z "${overlay_links}" ]] || die "symlinks are not allowed in profile-overlay/airootfs; declare them in config/airootfs-symlinks instead:
+${overlay_links}"
+cp -a -- "${NINJAS_OVERLAY_DIR}/." "${airootfs}/"
+ok "overlay applied ($(find "${NINJAS_OVERLAY_DIR}" -type f | wc -l | tr -d ' ') files)"
+
+# ---------------------------------------------------------------------------
+# 6. Templates
+# ---------------------------------------------------------------------------
+log "Rendering templates"
+epoch="$(ninjas_source_date_epoch)"
+build_date="$(date -u --date="@${epoch}" +%Y-%m-%d)"
+build_yyyymm="$(date -u --date="@${epoch}" +%Y%m)"
+build_yyyymmdd="$(date -u --date="@${epoch}" +%Y%m%d)"
+archiso_version="unknown"
+if command -v pacman >/dev/null 2>&1; then
+  archiso_version="$(pacman -Q archiso 2>/dev/null | awk '{print $2}' || true)"
+  archiso_version="${archiso_version:-unknown}"
+fi
+git_revision="$(ninjas_git_revision)"
+
+declare -A tpl_vars=(
+  [NINJAS_OS_NAME]="${NINJAS_OS_NAME}"
+  [NINJAS_OS_ID]="${NINJAS_OS_ID}"
+  [NINJAS_OS_VERSION]="${NINJAS_OS_VERSION}"
+  [NINJAS_OS_CODENAME]="${NINJAS_OS_CODENAME}"
+  [NINJAS_OS_CODENAME_LOWER]="${NINJAS_OS_CODENAME,,}"
+  [NINJAS_OS_HOME_URL]="${NINJAS_OS_HOME_URL:-}"
+  [NINJAS_BUILD_DATE]="${build_date}"
+  [NINJAS_SOURCE_DATE_EPOCH]="${epoch}"
+  [NINJAS_ARCHISO_VERSION]="${archiso_version}"
+  [NINJAS_GIT_REVISION]="${git_revision}"
+  [NINJAS_LIVE_USER]="${NINJAS_LIVE_USER}"
+)
+
+render_template() {
+  local src=$1 dst=$2 content key
+  content="$(cat -- "${src}"; printf x)"; content="${content%x}"
+  for key in "${!tpl_vars[@]}"; do
+    content="${content//@${key}@/${tpl_vars[${key}]}}"
+  done
+  if [[ "${content}" =~ @[A-Z_]+@ ]]; then
+    die "template ${src} has an unknown placeholder: ${BASH_REMATCH[0]}"
+  fi
+  mkdir -p -- "$(dirname -- "${dst}")"
+  printf '%s' "${content}" > "${dst}"
+}
+
+template_count=0
+while IFS= read -r -d '' tpl; do
+  rel="${tpl#"${NINJAS_TEMPLATE_DIR}"/}"
+  rel="${rel%.in}"
+  [[ "${rel}" != *..* ]] || die "invalid template path: ${tpl}"
+  render_template "${tpl}" "${airootfs}/${rel}"
+  template_count=$((template_count + 1))
+done < <(find "${NINJAS_TEMPLATE_DIR}" -type f -name '*.in' -print0 | sort -z)
+ok "rendered ${template_count} templates (build date ${build_date}, epoch ${epoch})"
+
+# ---------------------------------------------------------------------------
+# 7. Symlinks
+# ---------------------------------------------------------------------------
+log "Creating declared symlinks"
+link_count=0
+skip_symlinks=0
+if [[ "${NINJAS_SKIP_SYMLINKS:-0}" == "1" ]]; then
+  # Test-only escape hatch for hosts that cannot create symlinks (Windows
+  # without Developer Mode). The resulting profile is NOT buildable and is
+  # marked as such so build-iso.sh refuses it.
+  skip_symlinks=1
+  warn "NINJAS_SKIP_SYMLINKS=1: declared symlinks will NOT be created; this profile is incomplete and cannot be built"
+  printf 'symlinks skipped (NINJAS_SKIP_SYMLINKS=1)
+' > "${profile}/.ninjas-profile-incomplete"
+else
+  rm -f -- "${profile}/.ninjas-profile-incomplete"
+fi
+while IFS= read -r line; do
+  read -r link target extra <<<"${line}"
+  [[ -n "${link}" && -n "${target}" && -z "${extra}" ]] \
+    || die "config/airootfs-symlinks: expected '<link> <target>' but got: ${line}"
+  [[ "${link}" == /* && "${link}" != *..* ]] || die "symlink path must be absolute without '..': ${link}"
+  [[ "${target}" != *..* ]] || die "symlink target must not contain '..': ${target}"
+  dst="${airootfs}${link}"
+  if [[ -e "${dst}" && ! -L "${dst}" ]]; then
+    die "cannot create symlink ${link}: a regular file or directory already exists there"
+  fi
+  if (( skip_symlinks )); then
+    continue
+  fi
+  mkdir -p -- "$(dirname -- "${dst}")"
+  ln -sfn -- "${target}" "${dst}"
+  [[ -L "${dst}" ]] || die "failed to create symlink ${link} (filesystem without symlink support?)"
+  link_count=$((link_count + 1))
+done < <(ninjas_read_list "${NINJAS_CONFIG_DIR}/airootfs-symlinks")
+ok "created ${link_count} symlinks"
+
+# ---------------------------------------------------------------------------
+# 8. profiledef.sh overrides
+# ---------------------------------------------------------------------------
+log "Appending Ninjas OS overrides to profiledef.sh"
+profiledef="${profile}/profiledef.sh"
+for field in iso_name iso_label iso_publisher iso_application iso_version file_permissions; do
+  grep -Eq "^${field}=" "${profiledef}" \
+    || warn "upstream profiledef.sh does not define ${field}; Archiso may have changed. Review ${profiledef}."
+done
+grep -q 'Ninjas OS overrides' "${profiledef}" && die "profiledef.sh already contains overrides (stale work dir?)"
+
+iso_label="${NINJAS_ISO_LABEL_PREFIX}_${build_yyyymm}"
+iso_version="${NINJAS_OS_VERSION}.${build_yyyymmdd}"
+(( ${#iso_label} <= 32 )) || die "iso_label '${iso_label}' exceeds 32 characters"
+
+# Values are embedded with printf %q so that quotes or spaces in the config
+# cannot break or inject into the sourced profiledef.sh.
+{
+  printf '\n# ---- Ninjas OS overrides (appended by scripts/prepare-profile.sh) ----\n'
+  printf '# Source of truth: config/ninjas-os.conf. Upstream values above are kept\n'
+  printf '# for review; these assignments win because they come last.\n'
+  printf 'iso_name=%q\n' "${NINJAS_ISO_NAME}"
+  printf 'iso_label=%q\n' "${iso_label}"
+  printf 'iso_publisher=%q\n' "${NINJAS_ISO_PUBLISHER}"
+  printf 'iso_application=%q\n' "${NINJAS_ISO_APPLICATION}"
+  printf 'iso_version=%q\n' "${iso_version}"
+  printf 'file_permissions+=(\n'
+  printf '  ["/usr/local/bin/ninjas-live-setup"]="0:0:755"\n'
+  printf '  ["/etc/sudoers.d/99-ninjas-live"]="0:0:440"\n'
+  printf ')\n'
+} >> "${profiledef}"
+
+bash -n "${profiledef}" || die "generated profiledef.sh has a syntax error"
+# Source in a subshell exactly like mkarchiso does and check the result.
+check="$(
+  set -e
+  declare -A file_permissions
+  # shellcheck disable=SC1090
+  source "${profiledef}"
+  # shellcheck disable=SC2154  # iso_* come from profiledef.sh
+  printf '%s|%s|%s\n' "${iso_name}" "${iso_label}" "${file_permissions[/usr/local/bin/ninjas-live-setup]:-missing}"
+)"
+[[ "${check}" == "${NINJAS_ISO_NAME}|${iso_label}|0:0:755" ]] \
+  || die "profiledef.sh override check failed (got: ${check})"
+ok "profiledef.sh: iso_name=${NINJAS_ISO_NAME} iso_label=${iso_label} iso_version=${iso_version}"
+
+# Record the epoch so build-iso.sh uses the same timestamp as the templates.
+printf '%s\n' "${epoch}" > "${profile}/.ninjas-source-date-epoch"
+
+# ---------------------------------------------------------------------------
+# Prove the upstream profile is untouched
+# ---------------------------------------------------------------------------
+fingerprint_after="$(upstream_fingerprint)"
+[[ "${fingerprint_before}" == "${fingerprint_after}" ]] \
+  || die "upstream profile ${upstream} changed during preparation; this must never happen"
+ok "upstream profile unchanged"
+
+if (( ! quiet )); then
+  printf '\nPrepared profile: %s\n' "${profile}"
+  printf '  packages:   %s\n' "${pkg_file}"
+  printf '  profiledef: %s\n' "${profiledef}"
+  printf '  airootfs:   %s\n' "${airootfs}"
+  printf 'Review these before building, then run: scripts/build-iso.sh\n'
+fi

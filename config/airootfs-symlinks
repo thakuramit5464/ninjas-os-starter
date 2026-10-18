@@ -1,0 +1,16 @@
+# Symlinks created inside work/profile/airootfs by scripts/prepare-profile.sh.
+# Format: <link path inside airootfs> <whitespace> <link target>
+#
+# Symlinks are declared here instead of being committed to profile-overlay/
+# because Git on Windows (and the original starter commit) turns symlinks into
+# plain text files, which silently breaks systemd unit enablement.
+
+# Enable SDDM as the display manager (equivalent of: systemctl enable sddm).
+/etc/systemd/system/display-manager.service                      /usr/lib/systemd/system/sddm.service
+
+# Enable NetworkManager (equivalent of: systemctl enable NetworkManager).
+/etc/systemd/system/multi-user.target.wants/NetworkManager.service   /usr/lib/systemd/system/NetworkManager.service
+/etc/systemd/system/dbus-org.freedesktop.NetworkManager.service      /usr/lib/systemd/system/NetworkManager.service
+
+# Enable the Ninjas OS live-session setup oneshot.
+/etc/systemd/system/multi-user.target.wants/ninjas-live-setup.service /etc/systemd/system/ninjas-live-setup.service
